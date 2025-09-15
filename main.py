@@ -21,19 +21,17 @@ except ValueError:
 st.markdown('---')
 st.header('선택된 숫자까지의 합계 계산')
 
-col1, col2 = st.columns(2)
+options = []
+if A and A.isdigit():
+    options.append(int(A))
+if B and B.isdigit():
+    options.append(int(B))
 
-with col1:
-    num_a = st.number_input('첫 번째 숫자 (A)를 입력하세요:', min_value=1, step=1, key='num_a')
-with col2:
-    num_b = st.number_input('두 번째 숫자 (B)를 입력하세요:', min_value=1, step=1, key='num_b')
+if options:
+    selected_number = st.selectbox('합계를 구할 숫자를 선택하세요:', options)
 
-options = [num_a, num_b]
-selected_num = st.selectbox('1부터 합을 계산할 숫자를 선택하세요:',options)
+    total_sum = selected_number * (selected_number + 1) // 2
 
-def calculate_sum(n):
-    return sum(range(1, n + 1))
-
-if selected_num:
-    result = calculate_sum(selected_num)
-    st.success(f'1부터 **{selected_num}**까지의 모든 정수 합은 **{result}**입니다.')
+    st.info(f'1부터 {selected_number}까지의 모든 정수 합은 {total_sum}입니다.')
+else:
+    st.warning('합계를 계산하려면 먼저 A와 B에 유효한 정수를 입력해 주세요.')
