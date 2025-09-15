@@ -1,7 +1,10 @@
 import streamlit as st
-st.title('A,B 숫자 합하기')
-st.write('A와 B의 값을 더해줍니다.')
-A = int(input('첫번째 숫자: '))
-B = int(input('두번째 숫자: '))
-result = A+B
-print('두 숫자의 합은?',result)
+st.title('연산')
+
+st.header('A와 B 더하기')
+with col1:
+  A = st.text_input('A를 입력하세요:', key= 'A_input')
+with col2:
+  B = st.text_input('B를 입력하세요:', key= 'B_input')
+result = A + B
+st.success(f'A와 B의 합은?{result}')
