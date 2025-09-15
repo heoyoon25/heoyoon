@@ -12,8 +12,8 @@ try:
     num_A = float(A)
     num_B = float(B)
 
-sum.result = num_A + num_B
-st.success(f'두 수의 합은?{sum.result}')
+sum_result = num_A + num_B
+st.success(f'두 수의 합은?{sum_result}')
 
 except ValueError:
     st.error('유효한 숫자를 입력해 주세요')
