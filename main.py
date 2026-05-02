@@ -577,24 +577,46 @@ elif current == "eda":
 # ══════════════════════════════════════════════════════════════════
 #  PAGE 3 ── 데이터 전처리 / Feature Selection / Partitioning
 # ══════════════════════════════════════════════════════════════════
-elif current == "preprocess":
-    check_data()
+# ── 필요 import ──────────────────────────────────────────────
+import streamlit as st
+import pandas as pd
+import numpy as np
+from sklearn.preprocessing import LabelEncoder
+from sklearn.model_selection import train_test_split
+
+# ════════════════════════════════════════════════════════════
+# 전처리 페이지 메인
+# ════════════════════════════════════════════════════════════
+def show_preprocess_page():
+    st.markdown("## ⚙️ 데이터 전처리")
+
+    if "df" not in st.session_state or st.session_state.df is None:
+        st.warning("⚠️ 먼저 데이터를 업로드해주세요.")
+        return
+
     df = st.session_state.df.copy()
 
-    st.markdown("## ⚙️ 데이터 전처리")
+    # ── 현재 데이터 현황 ──────────────────────────────────────
+    st.markdown("### 📊 현재 데이터 현황")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("전체 행 수", f"{df.shape[0]:,}행")
+    with col2:
+        st.metric("전체 열 수", f"{df.shape[1]:,}개")
+    with col3:
+        st.metric("결측치 수", f"{df.isnull().sum().sum():,}개")
+
     st.markdown('<hr class="section-divider">', unsafe_allow_html=True)
 
-    st.markdown("### 🧹 데이터 전처리")
-
-    tab1, tab2, tab3, tab4 = st.tabs(["결측치 처리", "이상치 처리", "수치형 변환", "원핫 인코딩"])
-
-    # ── 전처리 탭 상단에 추가 (tab1 ~ tab4 위에) ──
+    # ════════════════════════════════════════════════════════
+    # ⚡ 빠른 전처리 (One-Click)
+    # ════════════════════════════════════════════════════════
     st.markdown("### ⚡ 빠른 전처리 (One-Click)")
 
     with st.expander("🚀 전처리 한번에 실행", expanded=False):
         st.markdown("""
         **아래 순서로 자동 처리됩니다:**
-        1. 🔴 이상치 → IQR 방법으로 제거
+        1. 🔴 이상치 → IQR 방법으로 처리
         2. 🟡 결측치 → 수치형: 중앙값, 범주형: 최빈값으로 대체
         3. 🟢 인코딩 → 고유값 10개 이하: One-Hot, 초과: Label Encoding
         """)
@@ -602,31 +624,32 @@ elif current == "preprocess":
         col1, col2 = st.columns(2)
         with col1:
             target_col_quick = st.selectbox(
-                "🎯 Target 컬럼 선택 (인코딩 제외)",
+                "🎯 Target 컬럼 선택 (인코딩/이상치 처리 제외)",
                 options=st.session_state.df.columns.tolist(),
                 key="quick_target"
             )
         with col2:
-            outlier_method = st.radio(
+            outlier_method_quick = st.radio(
                 "이상치 처리 방법",
-                ["IQR 제거", "IQR 대체(중앙값)"],
+                ["IQR 대체(중앙값)", "IQR 제거"],
                 horizontal=True,
                 key="quick_outlier_method"
             )
 
         if st.button("⚡ 전처리 한번에 실행", key="btn_quick_preprocess", type="primary"):
             df_work = st.session_state.df.copy()
-            log = []  # 처리 로그
+            log = []
 
             try:
                 with st.spinner("전처리 진행 중..."):
 
-                    # ── STEP 1: 이상치 처리 ──────────────────────
+                    # ── STEP 1: 이상치 처리 ──────────────────
                     num_cols = [
                         c for c in df_work.select_dtypes(include='number').columns
-                        if c != target_col_quick
+                        if c != target_col_quick  # ✅ Target 제외
                     ]
                     outlier_count = 0
+
                     for c in num_cols:
                         Q1 = df_work[c].quantile(0.25)
                         Q3 = df_work[c].quantile(0.75)
@@ -637,46 +660,49 @@ elif current == "preprocess":
                         cnt = mask.sum()
 
                         if cnt > 0:
-                            if outlier_method == "IQR 제거":
-                                df_work = df_work[~mask]
+                            if outlier_method_quick == "IQR 제거":
+                                # ✅ 제거 후 클래스 2개 이상인지 확인
+                                df_temp = df_work[~mask]
+                                if df_temp[target_col_quick].nunique() >= 2:
+                                    df_work = df_temp
+                                else:
+                                    # 클래스 손실 위험 → 대체로 변경
+                                    df_work.loc[mask, c] = df_work[c].median()
                             else:
                                 df_work.loc[mask, c] = df_work[c].median()
                             outlier_count += cnt
 
-                    log.append(f"✅ 이상치 처리 완료: {outlier_count}개 처리 ({outlier_method})")
+                    log.append(f"✅ 이상치 처리 완료: {outlier_count}개 처리")
 
-                    # ── STEP 2: 결측치 처리 ──────────────────────
+                    # ── STEP 2: 결측치 처리 ──────────────────
                     missing_count = df_work.isnull().sum().sum()
-                    if missing_count > 0:
-                        for c in df_work.columns:
-                            if df_work[c].isnull().any():
-                                if pd.api.types.is_numeric_dtype(df_work[c]):
-                                    df_work[c] = df_work[c].fillna(df_work[c].median())
-                                else:
-                                    mode_val = df_work[c].mode()
-                                    df_work[c] = df_work[c].fillna(
-                                        mode_val[0] if len(mode_val) > 0 else "Unknown"
-                                    )
+                    for c in df_work.columns:
+                        if df_work[c].isnull().any():
+                            if pd.api.types.is_numeric_dtype(df_work[c]):
+                                df_work[c] = df_work[c].fillna(df_work[c].median())
+                            else:
+                                mode_val = df_work[c].mode()
+                                df_work[c] = df_work[c].fillna(
+                                    mode_val[0] if len(mode_val) > 0 else "Unknown"
+                                )
                     log.append(f"✅ 결측치 처리 완료: {missing_count}개 대체")
 
-                    # ── STEP 3: 인코딩 ───────────────────────────
+                    # ── STEP 3: 인코딩 ───────────────────────
                     cat_cols = [
                         c for c in df_work.columns
                         if not pd.api.types.is_numeric_dtype(df_work[c])
-                        and c != target_col_quick
+                        and c != target_col_quick  # ✅ Target 제외
                     ]
 
                     ohe_cols = [c for c in cat_cols if df_work[c].nunique() <= 10]
                     le_cols  = [c for c in cat_cols if df_work[c].nunique() > 10]
 
-                    # One-Hot Encoding
                     if ohe_cols:
                         df_work = pd.get_dummies(df_work, columns=ohe_cols, drop_first=True)
                         bool_cols = [c for c in df_work.columns if df_work[c].dtype == bool]
                         if bool_cols:
                             df_work[bool_cols] = df_work[bool_cols].astype(int)
 
-                    # Label Encoding
                     if le_cols:
                         le = LabelEncoder()
                         for c in le_cols:
@@ -686,7 +712,7 @@ elif current == "preprocess":
                         f"✅ 인코딩 완료: OHE {len(ohe_cols)}개 / Label {len(le_cols)}개"
                     )
 
-                    # ── Target 인코딩 (필요시) ───────────────────
+                    # ── STEP 4: Target 인코딩 (필요시) ───────
                     if not pd.api.types.is_numeric_dtype(df_work[target_col_quick]):
                         le = LabelEncoder()
                         df_work[target_col_quick] = le.fit_transform(
@@ -694,12 +720,11 @@ elif current == "preprocess":
                         )
                         log.append(f"✅ Target({target_col_quick}) 인코딩 완료")
 
-                # 결과 저장
+                # ── 결과 저장 ─────────────────────────────────
                 st.session_state.df = df_work
                 st.session_state.encoded = True
                 st.session_state.quick_preprocessed = True
 
-                # 로그 출력
                 st.success("🎉 전처리 완료!")
                 for msg in log:
                     st.write(msg)
@@ -719,601 +744,713 @@ elif current == "preprocess":
             except Exception as e:
                 st.error(f"❌ 전처리 오류: {e}")
 
+    st.markdown('<hr class="section-divider">', unsafe_allow_html=True)
+
+    # ════════════════════════════════════════════════════════
+    # 탭 구성
+    # ════════════════════════════════════════════════════════
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "🔴 이상치 처리",
+        "🟡 결측치 처리",
+        "🔵 수치형 변환",
+        "🟢 원핫인코딩"
+    ])
+
+    # ════════════════════════════════════════════════════════
+    # TAB 1: 이상치 처리
+    # ════════════════════════════════════════════════════════
     with tab1:
-        missing = st.session_state.df.isnull().sum()
-        missing = missing[missing > 0]
+        st.markdown("### 🔴 이상치 처리")
 
-        if missing.empty:
-            st.success("✅ 결측치가 없습니다.")
+        df_tab1 = st.session_state.df.copy()
+        num_cols_tab1 = df_tab1.select_dtypes(include='number').columns.tolist()
+
+        if not num_cols_tab1:
+            st.info("수치형 컬럼이 없습니다.")
         else:
-            miss_df = pd.DataFrame({
-                "변수명": missing.index,
-                "결측치 수": missing.values,
-                "결측치 비율(%)": (missing / len(st.session_state.df) * 100).round(2).values
-            })
-            st.dataframe(miss_df, use_container_width=True)
+            col1, col2 = st.columns(2)
+            with col1:
+                target_col_tab1 = st.selectbox(
+                    "🎯 Target 컬럼 선택 (이상치 처리 제외)",
+                    options=df_tab1.columns.tolist(),
+                    key="tab1_target"
+                )
+            with col2:
+                outlier_cols = st.multiselect(
+                    "이상치 처리할 컬럼 선택",
+                    options=[c for c in num_cols_tab1 if c != target_col_tab1],
+                    default=[c for c in num_cols_tab1 if c != target_col_tab1],
+                    key="outlier_cols"
+                )
 
-        method = st.radio(
-            "처리 방법",
-            ["평균값 대체 (수치형)", "중앙값 대체 (수치형)",
-             "최빈값 대체 (범주형)", "행 삭제"],
-            horizontal=True,
-            key="missing_method"
-        )
-
-        if st.button("✅ 결측치 처리 실행", key="btn_missing"):
-            df_work = st.session_state.df.copy()
-            num_cols = [c for c in df_work.columns if pd.api.types.is_numeric_dtype(df_work[c])]
-            cat_cols = [c for c in df_work.columns if not pd.api.types.is_numeric_dtype(df_work[c])]
-
-            if method == "행 삭제":
-                df_work = df_work.dropna().reset_index(drop=True)
-
-            else:
-                # ✅ 수치형 처리
-                for c in num_cols:
-                    if df_work[c].isnull().any():
-                        if method == "평균값 대체 (수치형)":
-                            df_work[c] = df_work[c].fillna(df_work[c].mean())
-                        else:  # 중앙값 or 최빈값 선택 시에도 수치형은 중앙값으로
-                            df_work[c] = df_work[c].fillna(df_work[c].median())
-
-                # ✅ 범주형 처리 (항상 최빈값으로)
-                for c in cat_cols:
-                    if df_work[c].isnull().any():
-                        mode_val = df_work[c].mode()
-                        if len(mode_val) > 0:
-                            df_work[c] = df_work[c].fillna(mode_val[0])
-
-            # ✅ 그래도 남은 NaN 강제 제거 (최종 안전망)
-            remaining = df_work.isnull().sum().sum()
-            if remaining > 0:
-                for c in df_work.columns:
-                    if df_work[c].isnull().any():
-                        if pd.api.types.is_numeric_dtype(df_work[c]):
-                            df_work[c] = df_work[c].fillna(df_work[c].median())
-                        else:
-                            df_work[c] = df_work[c].fillna("Unknown")
-
-            st.session_state.df = df_work
-            st.session_state.missing_handled = True
-
-            final_nan = df_work.isnull().sum().sum()
-            if final_nan == 0:
-                st.success(f"✅ 결측치 처리 완료! 남은 결측치: 0개 🎉")
-            else:
-                st.warning(f"⚠️ 처리 후 남은 결측치: {final_nan}개")
-            st.rerun()
-
-    # ── 이상치 ──────────────────────────────────────────────
-    with tab2:
-        df_cur = st.session_state.df
-
-        num_cols = []
-        for c in df_cur.columns:
-            if pd.api.types.is_numeric_dtype(df_cur[c]):
-                try:
-                    test = df_cur[c].dropna().astype(float).values
-                    _ = np.quantile(test, 0.25)
-                    num_cols.append(c)
-                except Exception:
-                    pass
-
-        if not num_cols:
-            st.info("수치형 변수가 없습니다.")
-        else:
-            outlier_info = []
-            for c in num_cols:
-                try:
-                    arr = df_cur[c].dropna().astype(float).values
-                    Q1 = float(np.quantile(arr, 0.25))
-                    Q3 = float(np.quantile(arr, 0.75))
-                    IQR = Q3 - Q1
-                    n_out = int(((arr < Q1 - 1.5 * IQR) | (arr > Q3 + 1.5 * IQR)).sum())
-                    outlier_info.append({
-                        "변수명": c,
-                        "이상치 수": n_out,
-                        "Q1": round(Q1, 2),
-                        "Q3": round(Q3, 2),
-                        "IQR": round(IQR, 2)
-                    })
-                except Exception:
-                    outlier_info.append({
-                        "변수명": c,
-                        "이상치 수": "계산불가",
-                        "Q1": "-", "Q3": "-", "IQR": "-"
-                    })
-
-            st.dataframe(pd.DataFrame(outlier_info), use_container_width=True)
-
-            out_method = st.radio(
+            outlier_method_tab1 = st.radio(
                 "처리 방법",
-                ["IQR 기반 클리핑 (Winsorizing)", "IQR 기반 행 제거"],
+                ["IQR 대체(중앙값)", "IQR 대체(평균)", "IQR 제거"],
                 horizontal=True,
-                key="outlier_method"
-            )
-            out_cols = st.multiselect(
-                "처리할 변수 선택",
-                num_cols,
-                default=num_cols,
-                key="outlier_cols"
+                key="outlier_method_tab1"
             )
 
-            if st.button("✅ 이상치 처리 실행", key="btn_outlier"):
-                df_work = st.session_state.df.copy()
-                processed = []
-                skipped = []
+            # 이상치 현황 미리보기
+            if outlier_cols:
+                st.markdown("**📊 이상치 현황**")
+                outlier_summary = []
+                for c in outlier_cols:
+                    Q1 = df_tab1[c].quantile(0.25)
+                    Q3 = df_tab1[c].quantile(0.75)
+                    IQR = Q3 - Q1
+                    lower = Q1 - 1.5 * IQR
+                    upper = Q3 + 1.5 * IQR
+                    cnt = ((df_tab1[c] < lower) | (df_tab1[c] > upper)).sum()
+                    if cnt > 0:
+                        outlier_summary.append({
+                            "컬럼": c,
+                            "이상치 수": cnt,
+                            "하한": round(lower, 4),
+                            "상한": round(upper, 4)
+                        })
 
-                for c in out_cols:
-                    try:
-                        arr = df_work[c].dropna().astype(float).values
-                        Q1 = float(np.quantile(arr, 0.25))
-                        Q3 = float(np.quantile(arr, 0.75))
-                        IQR = Q3 - Q1
-                        lo = Q1 - 1.5 * IQR
-                        hi = Q3 + 1.5 * IQR
-
-                        df_work[c] = df_work[c].astype(float)
-
-                        if out_method == "IQR 기반 클리핑 (Winsorizing)":
-                            df_work[c] = df_work[c].clip(lo, hi)
-                        else:
-                            df_work = df_work[
-                                (df_work[c] >= lo) & (df_work[c] <= hi)
-                            ]
-                        processed.append(c)
-                    except Exception as e:
-                        skipped.append(f"{c} ({e})")
-
-                # ✅ 행 제거 후 인덱스 리셋
-                df_work = df_work.reset_index(drop=True)
-
-                st.session_state.df = df_work
-                st.session_state.outlier_handled = True
-
-                if processed:
-                    st.success(
-                        f"✅ 처리 완료! 변수: {processed} / 현재 행 수: {len(df_work):,}"
-                    )
-                if skipped:
-                    st.warning(f"⚠️ 처리 실패: {skipped}")
-                st.rerun()
-
-    # ── 수치형 변환 ────────────────────────────────────
-    with tab3:
-        df_cur = st.session_state.df
-        cat_cols_all = [c for c in df_cur.columns if not pd.api.types.is_numeric_dtype(df_cur[c])]
-
-        st.markdown("#### 🔢 문자열 → 수치형 변환")
-        st.markdown("""
-        `%`, `₩`, `,` 등 특수문자가 포함된 숫자형 문자열을 수치형으로 변환합니다.  
-        예) `'13.5%'` → `13.5` / `'1,000'` → `1000`
-        """)
-
-        if not cat_cols_all:
-            st.success("✅ 변환할 범주형 변수가 없습니다.")
-        else:
-            # 자동 감지
-            auto_detect = []
-            for c in cat_cols_all:
-                sample = df_cur[c].dropna().astype(str).head(50)
-                cleaned = sample.str.replace(r'[%,₩$\s]', '', regex=True)
-                try:
-                    pd.to_numeric(cleaned)
-                    auto_detect.append(c)
-                except Exception:
-                    numeric_ratio = pd.to_numeric(cleaned, errors='coerce').notna().mean()
-                    if numeric_ratio > 0.8:
-                        auto_detect.append(c)
-
-            if auto_detect:
-                st.info(f"💡 수치형으로 변환 가능한 변수가 감지되었습니다: **{auto_detect}**")
-
-            convert_cols = st.multiselect(
-                "수치형으로 변환할 변수 선택",
-                cat_cols_all,
-                default=auto_detect,
-                key="convert_cols"
-            )
-
-            remove_chars = st.text_input(
-                "제거할 특수문자 (기본: % , ₩ $ 공백)",
-                value="%,₩$ ",
-                key="remove_chars"
-            )
-
-            col_prev1, col_prev2 = st.columns(2)
-            with col_prev1:
-                st.markdown("**변환 전 미리보기**")
-                if convert_cols:
+                if outlier_summary:
                     st.dataframe(
-                        df_cur[convert_cols].head(5).astype(str),
+                        pd.DataFrame(outlier_summary),
                         use_container_width=True
                     )
-
-            with col_prev2:
-                st.markdown("**변환 후 미리보기**")
-                if convert_cols:
-                    preview = df_cur[convert_cols].head(5).copy()
-                    for c in convert_cols:
-                        pattern = f"[{re.escape(remove_chars)}]"
-                        preview[c] = pd.to_numeric(
-                            preview[c].astype(str).str.replace(pattern, '', regex=True),
-                            errors='coerce'
-                        )
-                    st.dataframe(preview, use_container_width=True)
-
-            if st.button("✅ 수치형 변환 실행", key="btn_convert"):
-                if not convert_cols:
-                    st.warning("변환할 변수를 선택해 주세요.")
                 else:
-                    df_work = st.session_state.df.copy()
-                    success_cols = []
-                    fail_cols = []
+                    st.success("✅ 이상치가 없습니다!")
 
-                    for c in convert_cols:
-                        try:
-                            pattern = f"[{re.escape(remove_chars)}]"
-                            converted = pd.to_numeric(
-                                df_work[c].astype(str).str.replace(pattern, '', regex=True),
-                                errors='coerce'
-                            )
-                            success_rate = converted.notna().mean()
+            if st.button("🔴 이상치 처리 실행", key="btn_outlier", type="primary"):
+                df_work = st.session_state.df.copy()
+                total_cnt = 0
 
-                            if success_rate >= 0.8:
-                                # ✅ 변환 후 남은 NaN → 중앙값으로 대체
-                                if converted.isnull().any():
-                                    median_val = converted.median()
-                                    converted = converted.fillna(median_val)
+                try:
+                    for c in outlier_cols:
+                        Q1 = df_work[c].quantile(0.25)
+                        Q3 = df_work[c].quantile(0.75)
+                        IQR = Q3 - Q1
+                        lower = Q1 - 1.5 * IQR
+                        upper = Q3 + 1.5 * IQR
+                        mask = (df_work[c] < lower) | (df_work[c] > upper)
+                        cnt = mask.sum()
 
-                                df_work[c] = converted
-                                success_cols.append(f"{c} ({success_rate:.0%})")
+                        if cnt > 0:
+                            if outlier_method_tab1 == "IQR 제거":
+                                df_temp = df_work[~mask]
+                                # ✅ 클래스 보호
+                                if df_temp[target_col_tab1].nunique() >= 2:
+                                    df_work = df_temp
+                                else:
+                                    df_work.loc[mask, c] = df_work[c].median()
+                                    st.warning(
+                                        f"⚠️ {c}: 제거 시 클래스 손실 → 중앙값 대체로 변경"
+                                    )
+                            elif outlier_method_tab1 == "IQR 대체(중앙값)":
+                                df_work.loc[mask, c] = df_work[c].median()
                             else:
-                                fail_cols.append(f"{c} ({success_rate:.0%})")
-                        except Exception as e:
-                            fail_cols.append(f"{c} (오류: {e})")
+                                df_work.loc[mask, c] = df_work[c].mean()
+                            total_cnt += cnt
 
                     st.session_state.df = df_work
-                    st.session_state.convert_handled = True  # ✅ 완료 플래그 저장
+                    st.success(f"✅ 이상치 처리 완료: 총 {total_cnt}개 처리")
+                    st.metric("처리 후 행 수", f"{df_work.shape[0]:,}행")
 
-                    if success_cols:
-                        st.success(f"✅ 변환 완료: {success_cols}")
-                    if fail_cols:
-                        st.warning(f"⚠️ 변환 실패 (수치 비율 80% 미만): {fail_cols}")
-
-                    # ✅ 메시지 확인 후 rerun (0.5초 딜레이)
                     import time
                     time.sleep(0.5)
                     st.rerun()
 
-    # ── 원핫 인코딩 ─────────────────────────────────────────
-    with tab4:
-        df_cur = st.session_state.df
-        cat_cols = [c for c in df_cur.columns if not pd.api.types.is_numeric_dtype(df_cur[c])]
+                except Exception as e:
+                    st.error(f"❌ 이상치 처리 오류: {e}")
 
-        if not cat_cols:
-            st.success("✅ 인코딩할 범주형 변수가 없습니다.")
+    # ════════════════════════════════════════════════════════
+    # TAB 2: 결측치 처리
+    # ════════════════════════════════════════════════════════
+    with tab2:
+        st.markdown("### 🟡 결측치 처리")
+
+        df_tab2 = st.session_state.df.copy()
+        missing_info = df_tab2.isnull().sum()
+        missing_info = missing_info[missing_info > 0]
+
+        if missing_info.empty:
+            st.success("✅ 결측치가 없습니다!")
         else:
-            st.markdown("**범주형 변수 목록**")
-            cat_info = pd.DataFrame({
-                "변수명":    cat_cols,
-                "고유값 수": [df_cur[c].nunique() for c in cat_cols],
-                "샘플값":    [str(df_cur[c].dropna().unique()[:3].tolist()) for c in cat_cols],
+            # 결측치 현황
+            st.markdown("**📊 결측치 현황**")
+            missing_df = pd.DataFrame({
+                "컬럼": missing_info.index,
+                "결측치 수": missing_info.values,
+                "결측 비율(%)": (missing_info.values / len(df_tab2) * 100).round(2),
+                "데이터 타입": [str(df_tab2[c].dtype) for c in missing_info.index]
             })
-            st.dataframe(cat_info, use_container_width=True)
+            st.dataframe(missing_df, use_container_width=True)
 
-            high_cardinality = [c for c in cat_cols if df_cur[c].nunique() > 10]
-            if high_cardinality:
-                st.warning(f"""
-                ⚠️ **고유값이 10개 초과인 변수** (One-Hot 인코딩 시 컬럼 폭발 주의):  
-                {high_cardinality}  
-                → **수치형 변환 탭**에서 먼저 처리하거나, Label Encoding을 권장합니다.
-                """)
-
-            safe_cols = [c for c in cat_cols if df_cur[c].nunique() <= 10]
-
-            enc_method = st.radio(
-                "인코딩 방법",
-                ["One-Hot Encoding", "Label Encoding"],
-                horizontal=True,
-                key="enc_method"
-            )
-
-            if enc_method == "One-Hot Encoding":
-                enc_cols = st.multiselect(
-                    "인코딩할 변수 선택",
-                    cat_cols,
-                    default=safe_cols,
-                    key="enc_cols_ohe",
-                    help="고유값이 적은 변수만 선택을 권장합니다."
+            col1, col2 = st.columns(2)
+            with col1:
+                num_fill = st.radio(
+                    "수치형 결측치 처리",
+                    ["중앙값", "평균값", "최빈값", "0으로 대체"],
+                    horizontal=True,
+                    key="num_fill"
                 )
-                if enc_cols:
-                    expected_new_cols = sum(df_cur[c].nunique() - 1 for c in enc_cols)
-                    remaining_cols = len([c for c in df_cur.columns if c not in enc_cols])
-                    total_expected = remaining_cols + expected_new_cols
-                    current_cols = df_cur.shape[1]
-
-                    col_a, col_b, col_c = st.columns(3)
-                    with col_a:
-                        st.metric("현재 컬럼 수", f"{current_cols}개")
-                    with col_b:
-                        st.metric("인코딩 후 예상 컬럼 수", f"{total_expected}개")
-                    with col_c:
-                        delta = total_expected - current_cols
-                        st.metric("증가량", f"+{delta}개",
-                                  delta_color="inverse" if delta > 50 else "normal")
-            else:
-                enc_cols = st.multiselect(
-                    "인코딩할 변수 선택",
-                    cat_cols,
-                    default=cat_cols,
-                    key="enc_cols_le"
+            with col2:
+                cat_fill = st.radio(
+                    "범주형 결측치 처리",
+                    ["최빈값", "Unknown으로 대체"],
+                    horizontal=True,
+                    key="cat_fill"
                 )
 
-            if st.button("✅ 인코딩 실행", key="btn_encode"):
-                if not enc_cols:
-                    st.warning("인코딩할 변수를 선택해 주세요.")
-                else:
-                    df_work = st.session_state.df.copy()
-                    try:
-                        if enc_method == "One-Hot Encoding":
-                            df_work = pd.get_dummies(df_work, columns=enc_cols, drop_first=True)
+            if st.button("🟡 결측치 처리 실행", key="btn_missing", type="primary"):
+                df_work = st.session_state.df.copy()
+                filled_count = 0
 
-                            # ✅ bool 타입 → int로 변환 (pandas 2.0+ 대응)
-                            bool_cols = [c for c in df_work.columns if df_work[c].dtype == bool]
-                            if bool_cols:
-                                df_work[bool_cols] = df_work[bool_cols].astype(int)
-
-                        else:  # Label Encoding
-                            le = LabelEncoder()
-                            for c in enc_cols:
-                                # ✅ NaN 먼저 처리 후 인코딩
-                                if df_work[c].isnull().any():
+                try:
+                    for c in df_work.columns:
+                        if df_work[c].isnull().any():
+                            cnt = df_work[c].isnull().sum()
+                            if pd.api.types.is_numeric_dtype(df_work[c]):
+                                if num_fill == "중앙값":
+                                    df_work[c] = df_work[c].fillna(df_work[c].median())
+                                elif num_fill == "평균값":
+                                    df_work[c] = df_work[c].fillna(df_work[c].mean())
+                                elif num_fill == "최빈값":
+                                    mode_val = df_work[c].mode()
+                                    df_work[c] = df_work[c].fillna(
+                                        mode_val[0] if len(mode_val) > 0 else 0
+                                    )
+                                else:
+                                    df_work[c] = df_work[c].fillna(0)
+                            else:
+                                if cat_fill == "최빈값":
                                     mode_val = df_work[c].mode()
                                     df_work[c] = df_work[c].fillna(
                                         mode_val[0] if len(mode_val) > 0 else "Unknown"
                                     )
+                                else:
+                                    df_work[c] = df_work[c].fillna("Unknown")
+                            filled_count += cnt
+
+                    st.session_state.df = df_work
+                    st.success(f"✅ 결측치 처리 완료: {filled_count}개 대체")
+                    st.metric("잔여 결측치", f"{df_work.isnull().sum().sum()}개")
+
+                    import time
+                    time.sleep(0.5)
+                    st.rerun()
+
+                except Exception as e:
+                    st.error(f"❌ 결측치 처리 오류: {e}")
+
+    # ════════════════════════════════════════════════════════
+    # TAB 3: 수치형 변환
+    # ════════════════════════════════════════════════════════
+    with tab3:
+        st.markdown("### 🔵 수치형 변환")
+
+        df_tab3 = st.session_state.df.copy()
+        num_cols_tab3 = df_tab3.select_dtypes(include='number').columns.tolist()
+
+        if not num_cols_tab3:
+            st.info("수치형 컬럼이 없습니다.")
+        else:
+            col1, col2 = st.columns(2)
+            with col1:
+                target_col_tab3 = st.selectbox(
+                    "🎯 Target 컬럼 선택 (변환 제외)",
+                    options=df_tab3.columns.tolist(),
+                    key="tab3_target"
+                )
+            with col2:
+                scale_method = st.radio(
+                    "변환 방법",
+                    ["StandardScaler", "MinMaxScaler", "Log변환"],
+                    horizontal=True,
+                    key="scale_method"
+                )
+
+            scale_cols = st.multiselect(
+                "변환할 컬럼 선택",
+                options=[c for c in num_cols_tab3 if c != target_col_tab3],
+                default=[c for c in num_cols_tab3 if c != target_col_tab3],
+                key="scale_cols"
+            )
+
+            if st.button("🔵 수치형 변환 실행", key="btn_scale", type="primary"):
+                df_work = st.session_state.df.copy()
+
+                try:
+                    from sklearn.preprocessing import StandardScaler, MinMaxScaler
+
+                    if scale_method == "StandardScaler":
+                        scaler = StandardScaler()
+                        df_work[scale_cols] = scaler.fit_transform(df_work[scale_cols])
+                    elif scale_method == "MinMaxScaler":
+                        scaler = MinMaxScaler()
+                        df_work[scale_cols] = scaler.fit_transform(df_work[scale_cols])
+                    else:
+                        for c in scale_cols:
+                            if (df_work[c] > 0).all():
+                                df_work[c] = np.log(df_work[c])
+                            else:
+                                df_work[c] = np.log1p(df_work[c])
+
+                    st.session_state.df = df_work
+                    st.success(f"✅ 수치형 변환 완료: {len(scale_cols)}개 컬럼")
+
+                    import time
+                    time.sleep(0.5)
+                    st.rerun()
+
+                except Exception as e:
+                    st.error(f"❌ 수치형 변환 오류: {e}")
+
+    # ════════════════════════════════════════════════════════
+    # TAB 4: 원핫인코딩
+    # ════════════════════════════════════════════════════════
+    with tab4:
+        st.markdown("### 🟢 원핫인코딩")
+
+        df_tab4 = st.session_state.df.copy()
+        cat_cols_tab4 = [
+            c for c in df_tab4.columns
+            if not pd.api.types.is_numeric_dtype(df_tab4[c])
+        ]
+
+        if not cat_cols_tab4:
+            st.success("✅ 인코딩할 범주형 컬럼이 없습니다!")
+        else:
+            col1, col2 = st.columns(2)
+            with col1:
+                target_col_tab4 = st.selectbox(
+                    "🎯 Target 컬럼 선택 (인코딩 제외)",
+                    options=df_tab4.columns.tolist(),
+                    key="tab4_target"
+                )
+            with col2:
+                encode_method = st.radio(
+                    "인코딩 방법",
+                    ["One-Hot Encoding", "Label Encoding", "자동(고유값 기준)"],
+                    horizontal=True,
+                    key="encode_method"
+                )
+
+            encode_cols = st.multiselect(
+                "인코딩할 컬럼 선택",
+                options=[c for c in cat_cols_tab4 if c != target_col_tab4],
+                default=[c for c in cat_cols_tab4 if c != target_col_tab4],
+                key="encode_cols"
+            )
+
+            if encode_cols:
+                st.markdown("**📊 인코딩 대상 컬럼 현황**")
+                encode_summary = []
+                for c in encode_cols:
+                    encode_summary.append({
+                        "컬럼": c,
+                        "고유값 수": df_tab4[c].nunique(),
+                        "샘플": str(df_tab4[c].unique()[:3].tolist())
+                    })
+                st.dataframe(
+                    pd.DataFrame(encode_summary),
+                    use_container_width=True
+                )
+
+            if st.button("🟢 인코딩 실행", key="btn_encode", type="primary"):
+                df_work = st.session_state.df.copy()
+
+                try:
+                    if encode_method == "One-Hot Encoding":
+                        df_work = pd.get_dummies(
+                            df_work,
+                            columns=encode_cols,
+                            drop_first=True
+                        )
+                        bool_cols = [
+                            c for c in df_work.columns
+                            if df_work[c].dtype == bool
+                        ]
+                        if bool_cols:
+                            df_work[bool_cols] = df_work[bool_cols].astype(int)
+
+                    elif encode_method == "Label Encoding":
+                        le = LabelEncoder()
+                        for c in encode_cols:
+                            df_work[c] = le.fit_transform(df_work[c].astype(str))
+
+                    else:  # 자동
+                        ohe_cols = [c for c in encode_cols if df_work[c].nunique() <= 10]
+                        le_cols  = [c for c in encode_cols if df_work[c].nunique() > 10]
+
+                        if ohe_cols:
+                            df_work = pd.get_dummies(
+                                df_work,
+                                columns=ohe_cols,
+                                drop_first=True
+                            )
+                            bool_cols = [
+                                c for c in df_work.columns
+                                if df_work[c].dtype == bool
+                            ]
+                            if bool_cols:
+                                df_work[bool_cols] = df_work[bool_cols].astype(int)
+
+                        if le_cols:
+                            le = LabelEncoder()
+                            for c in le_cols:
                                 df_work[c] = le.fit_transform(df_work[c].astype(str))
 
-                        # ✅ 인코딩 후 남은 object 컬럼 확인 및 경고
-                        remaining_obj = [
-                            c for c in df_work.columns
-                            if df_work[c].dtype == object and c not in enc_cols
-                        ]
-                        if remaining_obj:
-                            st.warning(f"⚠️ 아직 인코딩되지 않은 범주형 변수: {remaining_obj}")
+                    # ✅ Target 컬럼 보호 확인
+                    if target_col_tab4 not in df_work.columns:
+                        st.error(
+                            f"❌ Target 컬럼({target_col_tab4})이 사라졌습니다! "
+                            f"인코딩 대상에서 제외해주세요."
+                        )
+                    else:
+                        # ✅ 클래스 수 확인
+                        n_classes = df_work[target_col_tab4].nunique()
+                        if n_classes < 2:
+                            st.error(
+                                f"❌ Target 클래스가 {n_classes}개입니다. "
+                                f"최소 2개 이상이어야 합니다."
+                            )
+                        else:
+                            st.session_state.df = df_work
+                            st.session_state.encoded = True
+                            st.success(
+                                f"✅ 인코딩 완료! "
+                                f"컬럼 수: {df_tab4.shape[1]} → {df_work.shape[1]}"
+                            )
 
-                        # ✅ 최종 NaN 확인
-                        final_nan = df_work.isnull().sum().sum()
-                        if final_nan > 0:
-                            st.warning(f"⚠️ 인코딩 후 NaN {final_nan}개 감지 → 자동 제거")
-                            for c in df_work.columns:
-                                if df_work[c].isnull().any():
-                                    if pd.api.types.is_numeric_dtype(df_work[c]):
-                                        df_work[c] = df_work[c].fillna(df_work[c].median())
-                                    else:
-                                        df_work[c] = df_work[c].fillna("Unknown")
+                            import time
+                            time.sleep(0.5)
+                            st.rerun()
 
-                        st.session_state.df = df_work
-                        st.session_state.encoded = True
-                        st.success(f"✅ 인코딩 완료! (현재 열 수: {df_work.shape[1]})")
+                except Exception as e:
+                    st.error(f"❌ 인코딩 오류: {e}")
 
+    st.markdown('<hr class="section-divider">', unsafe_allow_html=True)
+
+    # ════════════════════════════════════════════════════════
+    # Feature Selection
+    # ════════════════════════════════════════════════════════
+    st.markdown("### 🎯 Feature Selection")
+
+    df_fs = st.session_state.df.copy()
+
+    col1, col2 = st.columns(2)
+    with col1:
+        target_fs = st.selectbox(
+            "🎯 종속변수(Target) 선택",
+            options=df_fs.columns.tolist(),
+            key="fs_target_main"
+        )
+    with col2:
+        fs_method = st.radio(
+            "Feature Selection 방법",
+            ["상관계수", "Random Forest 중요도", "Stepwise Selection"],
+            horizontal=True,
+            key="fs_method"
+        )
+
+    # ── 상관계수 ──────────────────────────────────────────────
+    if fs_method == "상관계수":
+        threshold_corr = st.slider(
+            "상관계수 임계값 (절댓값)",
+            min_value=0.0,
+            max_value=1.0,
+            value=0.1,
+            step=0.01,
+            key="corr_threshold"
+        )
+
+        if st.button("📊 상관계수 기반 선택", key="btn_corr", type="primary"):
+            try:
+                num_df = df_fs.select_dtypes(include='number')
+                if target_fs in num_df.columns:
+                    corr = num_df.corr()[target_fs].drop(target_fs)
+                    selected = corr[corr.abs() >= threshold_corr].index.tolist()
+
+                    corr_df = pd.DataFrame({
+                        "변수": corr.index,
+                        "상관계수": corr.values,
+                        "절댓값": corr.abs().values,
+                        "선택여부": ["✅" if c in selected else "❌" for c in corr.index]
+                    }).sort_values("절댓값", ascending=False)
+
+                    st.dataframe(corr_df, use_container_width=True)
+                    st.info(f"📌 선택된 변수: {len(selected)}개")
+
+                    if st.button("✅ 선택된 변수로 업데이트", key="btn_apply_corr"):
+                        keep_cols = selected + [target_fs]
+                        st.session_state.df = df_fs[keep_cols].copy()
+                        st.success("✅ 데이터셋 업데이트 완료!")
+                        import time
+                        time.sleep(0.5)
+                        st.rerun()
+                else:
+                    st.warning("⚠️ Target이 수치형이 아닙니다.")
+            except Exception as e:
+                st.error(f"❌ 오류: {e}")
+
+    # ── Random Forest 중요도 ──────────────────────────────────
+    elif fs_method == "Random Forest 중요도":
+        top_n = st.slider(
+            "상위 N개 변수 선택",
+            min_value=1,
+            max_value=min(50, df_fs.shape[1] - 1),
+            value=min(20, df_fs.shape[1] - 1),
+            key="rf_top_n"
+        )
+
+        if st.button("🌲 Random Forest 중요도 계산", key="btn_rf", type="primary"):
+            try:
+                from sklearn.ensemble import RandomForestClassifier
+
+                feature_cols = [c for c in df_fs.columns if c != target_fs]
+                X_rf = df_fs[feature_cols].select_dtypes(include='number')
+                X_rf = X_rf.fillna(X_rf.median())
+                y_rf = df_fs[target_fs]
+
+                # ✅ 클래스 수 확인
+                if y_rf.nunique() < 2:
+                    st.error("❌ Target 클래스가 1개입니다. 데이터를 확인해주세요.")
+                else:
+                    with st.spinner("Random Forest 학습 중..."):
+                        rf = RandomForestClassifier(
+                            n_estimators=100,
+                            random_state=42,
+                            n_jobs=-1
+                        )
+                        rf.fit(X_rf, y_rf)
+
+                    importance_df = pd.DataFrame({
+                        "변수": X_rf.columns,
+                        "중요도": rf.feature_importances_
+                    }).sort_values("중요도", ascending=False).head(top_n)
+
+                    st.dataframe(importance_df, use_container_width=True)
+
+                    import plotly.express as px
+                    fig = px.bar(
+                        importance_df,
+                        x="중요도",
+                        y="변수",
+                        orientation='h',
+                        title=f"Top {top_n} Feature Importance"
+                    )
+                    fig.update_layout(yaxis={'categoryorder': 'total ascending'})
+                    st.plotly_chart(fig, use_container_width=True)
+
+                    selected_rf = importance_df["변수"].tolist()
+
+                    if st.button("✅ 선택된 변수로 업데이트", key="btn_apply_rf"):
+                        keep_cols = selected_rf + [target_fs]
+                        st.session_state.df = df_fs[keep_cols].copy()
+                        st.success("✅ 데이터셋 업데이트 완료!")
                         import time
                         time.sleep(0.5)
                         st.rerun()
 
-                    except Exception as e:
-                        st.error(f"❌ 인코딩 오류: {e}")
+            except Exception as e:
+                st.error(f"❌ 오류: {e}")
 
-    st.markdown('<hr class="section-divider">', unsafe_allow_html=True)
+    # ── Stepwise Selection ────────────────────────────────────
+    elif fs_method == "Stepwise Selection":
+        with st.expander("🔍 Stepwise Selection 설정", expanded=True):
+            col1, col2 = st.columns(2)
+            with col1:
+                step_direction = st.radio(
+                    "탐색 방향",
+                    ["Forward", "Backward", "Both"],
+                    horizontal=True,
+                    key="step_direction"
+                )
+            with col2:
+                step_criterion = st.radio(
+                    "선택 기준",
+                    ["p-value", "AIC"],
+                    horizontal=True,
+                    key="step_criterion"
+                )
 
-    # ── SECTION 2: Feature Selection ──────────────────────────
-    # ── Feature Selection 섹션에 추가 ──
-    st.markdown("### 🎯 Feature Selection")
+            if step_criterion == "p-value":
+                threshold_step = st.slider(
+                    "p-value 임계값",
+                    min_value=0.01,
+                    max_value=0.10,
+                    value=0.05,
+                    step=0.01,
+                    key="step_threshold"
+                )
+            else:
+                threshold_step = None
 
-    with st.expander("🔍 Stepwise Selection (자동 변수 선택)", expanded=False):
-        st.markdown("""
-        **Stepwise Selection 방식:**
-        - **Forward**: 변수를 하나씩 추가하며 최적 조합 탐색
-        - **Backward**: 전체 변수에서 하나씩 제거하며 최적 조합 탐색  
-        - **Both**: Forward + Backward 혼합 (권장)
-        - 기준: **AIC / BIC / p-value** 중 선택
-        """)
-
-        df_fs = st.session_state.df.copy()
-
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            target_fs = st.selectbox(
-                "🎯 종속변수 선택",
-                options=df_fs.columns.tolist(),
-                key="fs_target"
+            max_features_step = st.slider(
+                "최대 선택 변수 수",
+                min_value=1,
+                max_value=min(50, df_fs.shape[1] - 1),
+                value=min(20, df_fs.shape[1] - 1),
+                key="step_max_features"
             )
-        with col2:
-            step_direction = st.radio(
-                "탐색 방향",
-                ["Forward", "Backward", "Both"],
-                horizontal=True,
-                key="step_direction"
-            )
-        with col3:
-            step_criterion = st.radio(
-                "선택 기준",
-                ["p-value", "AIC"],
-                horizontal=True,
-                key="step_criterion"
-            )
-
-        if step_criterion == "p-value":
-            threshold = st.slider(
-                "p-value 임계값",
-                min_value=0.01,
-                max_value=0.10,
-                value=0.05,
-                step=0.01,
-                key="step_threshold"
-            )
-        else:
-            threshold = None
-
-        max_features = st.slider(
-            "최대 선택 변수 수",
-            min_value=1,
-            max_value=min(50, df_fs.shape[1] - 1),
-            value=min(20, df_fs.shape[1] - 1),
-            key="step_max_features"
-        )
 
         if st.button("🔍 Stepwise Selection 실행", key="btn_stepwise", type="primary"):
             try:
-                with st.spinner("Stepwise Selection 진행 중... (변수가 많으면 시간이 걸릴 수 있습니다)"):
+                import statsmodels.api as sm
 
-                    import statsmodels.api as sm
+                feature_cols = [c for c in df_fs.columns if c != target_fs]
+                X_all = df_fs[feature_cols].select_dtypes(include='number')
+                X_all = X_all.fillna(X_all.median())
+                y_all = df_fs[target_fs].copy()
 
-                    feature_cols = [c for c in df_fs.columns if c != target_fs]
-                    X_all = df_fs[feature_cols].copy()
-                    y_all = df_fs[target_fs].copy()
+                # ✅ 클래스 수 확인
+                if y_all.nunique() < 2:
+                    st.error("❌ Target 클래스가 1개입니다. 데이터를 확인해주세요.")
+                    st.stop()
 
-                    # 수치형만 사용
-                    X_all = X_all.select_dtypes(include='number')
-                    X_all = X_all.fillna(X_all.median())
+                def stepwise_selection(X, y, direction, criterion,
+                                       threshold=0.05, max_feat=20):
+                    selected = []
+                    best_aic = float('inf')
+                    step_log = []
 
-                    # ── Stepwise 함수 ─────────────────────────────
-                    def stepwise_selection(X, y, direction, criterion, threshold=0.05, max_feat=20):
-                        """
-                        Stepwise Feature Selection
-                        - direction: 'forward', 'backward', 'both'
-                        - criterion: 'p-value', 'AIC'
-                        """
-                        selected = []
+                    if direction in ["Forward", "Both"]:
                         remaining = list(X.columns)
-                        best_aic = float('inf')
-                        step_log = []
 
-                        # ── Forward Step ──────────────────────────
-                        if direction in ["Forward", "Both"]:
-                            selected = []
-                            remaining = list(X.columns)
-
-                            while remaining and len(selected) < max_feat:
-                                scores = {}
-                                for col in remaining:
-                                    candidate = selected + [col]
-                                    try:
-                                        X_cand = sm.add_constant(X[candidate])
-                                        model = sm.Logit(y, X_cand).fit(disp=0)
-
-                                        if criterion == "p-value":
-                                            pval = model.pvalues[col]
-                                            scores[col] = pval
-                                        else:
-                                            scores[col] = model.aic
-                                    except:
-                                        continue
-
-                                if not scores:
-                                    break
-
-                                best_col = min(scores, key=scores.get)
-                                best_score = scores[best_col]
-
-                                if criterion == "p-value":
-                                    if best_score < threshold:
-                                        selected.append(best_col)
-                                        remaining.remove(best_col)
-                                        step_log.append(
-                                            f"➕ 추가: **{best_col}** (p={best_score:.4f})"
-                                        )
+                        while remaining and len(selected) < max_feat:
+                            scores = {}
+                            for col in remaining:
+                                candidate = selected + [col]
+                                try:
+                                    X_cand = sm.add_constant(X[candidate])
+                                    model = sm.Logit(y, X_cand).fit(disp=0)
+                                    if criterion == "p-value":
+                                        scores[col] = model.pvalues[col]
                                     else:
-                                        break
+                                        scores[col] = model.aic
+                                except:
+                                    continue
+
+                            if not scores:
+                                break
+
+                            best_col = min(scores, key=scores.get)
+                            best_score = scores[best_col]
+
+                            if criterion == "p-value":
+                                if best_score < threshold:
+                                    selected.append(best_col)
+                                    remaining.remove(best_col)
+                                    step_log.append(
+                                        f"➕ 추가: **{best_col}** (p={best_score:.4f})"
+                                    )
                                 else:
-                                    if best_score < best_aic:
-                                        best_aic = best_score
-                                        selected.append(best_col)
-                                        remaining.remove(best_col)
-                                        step_log.append(
-                                            f"➕ 추가: **{best_col}** (AIC={best_score:.2f})"
-                                        )
-                                    else:
-                                        break
-
-                        # ── Backward Step ─────────────────────────
-                        elif direction == "Backward":
-                            selected = list(X.columns)[:max_feat]
-                            remaining = []
-
-                            while len(selected) > 1:
-                                scores = {}
-                                for col in selected:
-                                    candidate = [c for c in selected if c != col]
-                                    try:
-                                        X_cand = sm.add_constant(X[candidate])
-                                        model = sm.Logit(y, X_cand).fit(disp=0)
-
-                                        if criterion == "p-value":
-                                            scores[col] = model.pvalues.max()
-                                        else:
-                                            scores[col] = model.aic
-                                    except:
-                                        continue
-
-                                if not scores:
+                                    break
+                            else:
+                                if best_score < best_aic:
+                                    best_aic = best_score
+                                    selected.append(best_col)
+                                    remaining.remove(best_col)
+                                    step_log.append(
+                                        f"➕ 추가: **{best_col}** (AIC={best_score:.2f})"
+                                    )
+                                else:
                                     break
 
-                                worst_col = max(scores, key=scores.get)
-                                worst_score = scores[worst_col]
+                            # Both: Backward 검토
+                            if direction == "Both" and len(selected) > 1:
+                                while True:
+                                    pvals = {}
+                                    try:
+                                        X_sel = sm.add_constant(X[selected])
+                                        model = sm.Logit(y, X_sel).fit(disp=0)
+                                        for col in selected:
+                                            pvals[col] = model.pvalues.get(col, 0)
+                                    except:
+                                        break
 
-                                if criterion == "p-value":
-                                    if worst_score > threshold:
+                                    worst_col = max(pvals, key=pvals.get)
+                                    if pvals[worst_col] > threshold:
                                         selected.remove(worst_col)
                                         step_log.append(
-                                            f"➖ 제거: **{worst_col}** (p={worst_score:.4f})"
+                                            f"➖ 제거: **{worst_col}** "
+                                            f"(p={pvals[worst_col]:.4f})"
+                                        )
+                                    else:
+                                        break
+
+                    elif direction == "Backward":
+                        selected = list(X.columns)[:max_feat]
+
+                        while len(selected) > 1:
+                            try:
+                                X_sel = sm.add_constant(X[selected])
+                                model = sm.Logit(y, X_sel).fit(disp=0)
+
+                                if criterion == "p-value":
+                                    pvals = {
+                                        c: model.pvalues.get(c, 0)
+                                        for c in selected
+                                    }
+                                    worst_col = max(pvals, key=pvals.get)
+                                    if pvals[worst_col] > threshold:
+                                        selected.remove(worst_col)
+                                        step_log.append(
+                                            f"➖ 제거: **{worst_col}** "
+                                            f"(p={pvals[worst_col]:.4f})"
                                         )
                                     else:
                                         break
                                 else:
-                                    try:
-                                        X_cand = sm.add_constant(X[selected])
-                                        current_aic = sm.Logit(y, X_cand).fit(disp=0).aic
-                                        if worst_score < current_aic:
-                                            selected.remove(worst_col)
-                                            step_log.append(
-                                                f"➖ 제거: **{worst_col}** (AIC개선={current_aic - worst_score:.2f})"
-                                            )
-                                        else:
-                                            break
-                                    except:
+                                    current_aic = model.aic
+                                    aic_scores = {}
+                                    for col in selected:
+                                        candidate = [c for c in selected if c != col]
+                                        try:
+                                            X_cand = sm.add_constant(X[candidate])
+                                            m = sm.Logit(y, X_cand).fit(disp=0)
+                                            aic_scores[col] = m.aic
+                                        except:
+                                            continue
+
+                                    if not aic_scores:
                                         break
 
-                        return selected, step_log
+                                    best_remove = min(aic_scores, key=aic_scores.get)
+                                    if aic_scores[best_remove] < current_aic:
+                                        selected.remove(best_remove)
+                                        step_log.append(
+                                            f"➖ 제거: **{best_remove}** "
+                                            f"(AIC {current_aic:.2f}→{aic_scores[best_remove]:.2f})"
+                                        )
+                                    else:
+                                        break
+                            except:
+                                break
 
-                    # ── 실행 ──────────────────────────────────────
+                    return selected, step_log
+
+                with st.spinner("Stepwise Selection 진행 중..."):
                     selected_features, step_log = stepwise_selection(
                         X_all, y_all,
                         direction=step_direction,
                         criterion=step_criterion,
-                        threshold=threshold if threshold else 0.05,
-                        max_feat=max_features
+                        threshold=threshold_step if threshold_step else 0.05,
+                        max_feat=max_features_step
                     )
 
-                # ── 결과 출력 ─────────────────────────────────────
+                # ── 결과 출력 ─────────────────────────────────
                 st.success(f"✅ Stepwise 완료! **{len(selected_features)}개** 변수 선택됨")
 
-                # 단계별 로그
                 with st.expander("📋 단계별 선택 과정", expanded=False):
-                    for log in step_log:
-                        st.markdown(log)
+                    for log_msg in step_log:
+                        st.markdown(log_msg)
 
-                # 선택된 변수 표시
-                st.markdown("**📌 선택된 변수 목록**")
-                result_df = pd.DataFrame({
-                    "변수명": selected_features,
-                    "순위": range(1, len(selected_features) + 1)
-                })
-                st.dataframe(result_df, use_container_width=True)
-
-                # 최종 모델 통계
                 if selected_features:
+                    result_df = pd.DataFrame({
+                        "순위": range(1, len(selected_features) + 1),
+                        "변수명": selected_features
+                    })
+                    st.dataframe(result_df, use_container_width=True)
+
+                    # 최종 모델 통계
                     try:
                         X_final = sm.add_constant(X_all[selected_features])
                         final_model = sm.Logit(y_all, X_final).fit(disp=0)
@@ -1331,135 +1468,111 @@ elif current == "preprocess":
                     except Exception as e:
                         st.warning(f"모델 요약 생성 실패: {e}")
 
-                # ── 데이터셋에 적용 ───────────────────────────────
-                st.markdown("---")
-                if st.button("✅ 선택된 변수로 데이터셋 업데이트", key="btn_apply_stepwise"):
-                    keep_cols = selected_features + [target_fs]
-                    st.session_state.df = df_fs[keep_cols].copy()
-                    st.success(f"✅ 데이터셋 업데이트 완료! ({len(keep_cols)}개 컬럼 유지)")
-
-                    import time
-                    time.sleep(0.5)
-                    st.rerun()
+                    # 데이터셋 적용
+                    st.markdown("---")
+                    if st.button("✅ 선택된 변수로 데이터셋 업데이트", key="btn_apply_stepwise"):
+                        keep_cols = selected_features + [target_fs]
+                        st.session_state.df = df_fs[keep_cols].copy()
+                        st.success(
+                            f"✅ 데이터셋 업데이트 완료! "
+                            f"({len(keep_cols)}개 컬럼 유지)"
+                        )
+                        import time
+                        time.sleep(0.5)
+                        st.rerun()
 
             except ImportError:
-                st.error("❌ statsmodels 패키지가 필요합니다: pip install statsmodels")
+                st.error("❌ statsmodels 패키지 필요: pip install statsmodels")
             except Exception as e:
                 st.error(f"❌ Stepwise 오류: {e}")
-                st.info("💡 변수가 너무 많거나 다중공선성이 있을 수 있습니다. 변수 수를 줄여보세요.")
-
-    st.markdown("### 🎯 Feature Selection")
-
-    df_cur = st.session_state.df
-    all_cols = df_cur.columns.tolist()
-
-    fs_col1, fs_col2 = st.columns(2)
-    with fs_col1:
-        selected_y = st.selectbox(
-            "종속변수 Y (타겟)",
-            all_cols,
-            index=len(all_cols) - 1,
-            help="예측하려는 목표 변수를 선택하세요.",
-            key="sel_y"
-        )
-    with fs_col2:
-        x_options = [c for c in all_cols if c != selected_y]
-        selected_X = st.multiselect(
-            "독립변수 X (피처)",
-            x_options,
-            default=x_options,
-            help="모델 학습에 사용할 변수를 선택하세요.",
-            key="sel_x"
-        )
-
-    if st.button("✅ Feature Selection 저장", key="btn_fs"):
-        if not selected_X:
-            st.error("❌ 독립변수를 1개 이상 선택해 주세요.")
-        else:
-            st.session_state.selected_X = selected_X
-            st.session_state.selected_y = selected_y
-            st.success(f"✅ 저장 완료! X: {len(selected_X)}개 변수 / Y: {selected_y}")
-
-    if st.session_state.selected_X:
-        with st.expander("현재 선택된 변수 확인"):
-            st.markdown(f"**Y (종속변수):** `{st.session_state.selected_y}`")
-            st.markdown("**X (독립변수):**")
-            cols_display = st.columns(4)
-            for i, c in enumerate(st.session_state.selected_X):
-                cols_display[i % 4].markdown(
-                    f'<span class="badge">{c}</span>', unsafe_allow_html=True)
+                st.info("💡 변수가 너무 많거나 다중공선성이 있을 수 있습니다.")
 
     st.markdown('<hr class="section-divider">', unsafe_allow_html=True)
 
-    # ── SECTION 3: Data Partitioning ──────────────────────────
-    st.markdown("### ✂️ Data Partitioning")
+    # ════════════════════════════════════════════════════════
+    # 학습 데이터 분할
+    # ════════════════════════════════════════════════════════
+    st.markdown("### ✂️ 학습/테스트 데이터 분할")
 
-    dp_col1, dp_col2 = st.columns([1, 2])
-    with dp_col1:
-        split_ratio = st.radio(
-            "Train : Test 비율",
-            ["7:3", "8:2"],
-            index=0,
-            help="학습 데이터와 테스트 데이터의 비율을 선택하세요.",
-            key="split_ratio_radio"
+    df_split = st.session_state.df.copy()
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        target_split = st.selectbox(
+            "🎯 Target 컬럼 선택",
+            options=df_split.columns.tolist(),
+            key="split_target"
         )
-        random_seed = st.number_input("Random Seed", value=42, min_value=0, key="random_seed")
+    with col2:
+        test_size = st.slider(
+            "테스트 데이터 비율",
+            min_value=0.1,
+            max_value=0.4,
+            value=0.3,
+            step=0.05,
+            key="test_size"
+        )
+    with col3:
+        random_state = st.number_input(
+            "Random State",
+            min_value=0,
+            max_value=999,
+            value=42,
+            key="random_state"
+        )
 
-    with dp_col2:
-        ratio_val = 0.7 if split_ratio == "7:3" else 0.8
-        n_total = len(df_cur)
-        n_train = int(n_total * ratio_val)
-        n_test  = n_total - n_train
+    if st.button("✂️ 데이터 분할 실행", key="btn_split", type="primary"):
+        try:
+            X = df_split.drop(columns=[target_split])
+            y = df_split[target_split]
 
-        st.markdown(f"""
-        <div class="card">
-            <div class="card-title">📊 분할 미리보기</div>
-            <div style="display:flex; gap:1rem; margin-top:0.5rem;">
-                <div style="flex:1; background:#667eea; border-radius:8px;
-                            padding:0.8rem; text-align:center; color:white;">
-                    <div style="font-size:1.5rem; font-weight:800;">{n_train:,}</div>
-                    <div style="font-size:0.82rem;">Train ({int(ratio_val*100)}%)</div>
-                </div>
-                <div style="flex:1; background:#764ba2; border-radius:8px;
-                            padding:0.8rem; text-align:center; color:white;">
-                    <div style="font-size:1.5rem; font-weight:800;">{n_test:,}</div>
-                    <div style="font-size:0.82rem;">Test ({int((1-ratio_val)*100)}%)</div>
-                </div>
-            </div>
-        </div>""", unsafe_allow_html=True)
-
-    if st.button("✅ 데이터 분할 실행", key="btn_split"):
-        if not st.session_state.selected_X or not st.session_state.selected_y:
-            st.error("❌ Feature Selection을 먼저 완료해 주세요.")
-        else:
-            try:
-                X = df_cur[st.session_state.selected_X]
-                y = df_cur[st.session_state.selected_y]
-
-                non_num = [c for c in X.columns if not pd.api.types.is_numeric_dtype(X[c])]
-                if non_num:
-                    st.warning(f"⚠️ 비수치형 변수 {non_num}는 제외됩니다. 인코딩 후 다시 시도하세요.")
-                    X = X[[c for c in X.columns if pd.api.types.is_numeric_dtype(X[c])]]
-
-                test_size = 1 - ratio_val
-                X_tr, X_te, y_tr, y_te = train_test_split(
+            # ✅ 클래스 수 확인
+            if y.nunique() < 2:
+                st.error(
+                    f"❌ Target 클래스가 {y.nunique()}개입니다. "
+                    f"최소 2개 이상이어야 합니다.\n\n"
+                    f"현재 값: {y.unique()}"
+                )
+            else:
+                X_train, X_test, y_train, y_test = train_test_split(
                     X, y,
                     test_size=test_size,
-                    random_state=int(random_seed),
-                    stratify=y
+                    random_state=random_state,
+                    stratify=y  # ✅ 클래스 비율 유지
                 )
-                st.session_state.X_train = X_tr
-                st.session_state.X_test  = X_te
-                st.session_state.y_train = y_tr
-                st.session_state.y_test  = y_te
-                st.session_state.split_ratio = split_ratio
 
-                st.success(
-                    f"✅ 분할 완료! Train: {len(X_tr):,}행 / Test: {len(X_te):,}행"
-                )
-            except Exception as e:
-                st.error(f"❌ 분할 오류: {e}")
+                # 세션에 저장
+                st.session_state.X_train = X_train
+                st.session_state.X_test  = X_test
+                st.session_state.y_train = y_train
+                st.session_state.y_test  = y_test
+                st.session_state.target_col = target_split
+                st.session_state.data_split = True
 
+                st.success("✅ 데이터 분할 완료!")
+
+                col_a, col_b, col_c, col_d = st.columns(4)
+                with col_a:
+                    st.metric("Train 행 수", f"{X_train.shape[0]:,}행")
+                with col_b:
+                    st.metric("Test 행 수", f"{X_test.shape[0]:,}행")
+                with col_c:
+                    st.metric("Feature 수", f"{X_train.shape[1]:,}개")
+                with col_d:
+                    st.metric("Target", target_split)
+
+                # 클래스 분포 확인
+                st.markdown("**📊 클래스 분포 확인**")
+                col_e, col_f = st.columns(2)
+                with col_e:
+                    st.write("Train 클래스 분포:")
+                    st.write(y_train.value_counts())
+                with col_f:
+                    st.write("Test 클래스 분포:")
+                    st.write(y_test.value_counts())
+
+        except Exception as e:
+            st.error(f"❌ 데이터 분할 오류: {e}")
 
 # ══════════════════════════════════════════════════════════════════
 #  PAGE 4 ── 연구 모형
