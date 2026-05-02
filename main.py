@@ -588,7 +588,137 @@ elif current == "preprocess":
 
     tab1, tab2, tab3, tab4 = st.tabs(["결측치 처리", "이상치 처리", "수치형 변환", "원핫 인코딩"])
 
-    # ── 결측치 ──────────────────────────────────────────────
+    # ── 전처리 탭 상단에 추가 (tab1 ~ tab4 위에) ──
+    st.markdown("### ⚡ 빠른 전처리 (One-Click)")
+
+    with st.expander("🚀 전처리 한번에 실행", expanded=False):
+        st.markdown("""
+        **아래 순서로 자동 처리됩니다:**
+        1. 🔴 이상치 → IQR 방법으로 제거
+        2. 🟡 결측치 → 수치형: 중앙값, 범주형: 최빈값으로 대체
+        3. 🟢 인코딩 → 고유값 10개 이하: One-Hot, 초과: Label Encoding
+        """)
+
+        col1, col2 = st.columns(2)
+        with col1:
+            target_col_quick = st.selectbox(
+                "🎯 Target 컬럼 선택 (인코딩 제외)",
+                options=st.session_state.df.columns.tolist(),
+                key="quick_target"
+            )
+        with col2:
+            outlier_method = st.radio(
+                "이상치 처리 방법",
+                ["IQR 제거", "IQR 대체(중앙값)"],
+                horizontal=True,
+                key="quick_outlier_method"
+            )
+
+        if st.button("⚡ 전처리 한번에 실행", key="btn_quick_preprocess", type="primary"):
+            df_work = st.session_state.df.copy()
+            log = []  # 처리 로그
+
+            try:
+                with st.spinner("전처리 진행 중..."):
+
+                    # ── STEP 1: 이상치 처리 ──────────────────────
+                    num_cols = [
+                        c for c in df_work.select_dtypes(include='number').columns
+                        if c != target_col_quick
+                    ]
+                    outlier_count = 0
+                    for c in num_cols:
+                        Q1 = df_work[c].quantile(0.25)
+                        Q3 = df_work[c].quantile(0.75)
+                        IQR = Q3 - Q1
+                        lower = Q1 - 1.5 * IQR
+                        upper = Q3 + 1.5 * IQR
+                        mask = (df_work[c] < lower) | (df_work[c] > upper)
+                        cnt = mask.sum()
+
+                        if cnt > 0:
+                            if outlier_method == "IQR 제거":
+                                df_work = df_work[~mask]
+                            else:
+                                df_work.loc[mask, c] = df_work[c].median()
+                            outlier_count += cnt
+
+                    log.append(f"✅ 이상치 처리 완료: {outlier_count}개 처리 ({outlier_method})")
+
+                    # ── STEP 2: 결측치 처리 ──────────────────────
+                    missing_count = df_work.isnull().sum().sum()
+                    if missing_count > 0:
+                        for c in df_work.columns:
+                            if df_work[c].isnull().any():
+                                if pd.api.types.is_numeric_dtype(df_work[c]):
+                                    df_work[c] = df_work[c].fillna(df_work[c].median())
+                                else:
+                                    mode_val = df_work[c].mode()
+                                    df_work[c] = df_work[c].fillna(
+                                        mode_val[0] if len(mode_val) > 0 else "Unknown"
+                                    )
+                    log.append(f"✅ 결측치 처리 완료: {missing_count}개 대체")
+
+                    # ── STEP 3: 인코딩 ───────────────────────────
+                    cat_cols = [
+                        c for c in df_work.columns
+                        if not pd.api.types.is_numeric_dtype(df_work[c])
+                        and c != target_col_quick
+                    ]
+
+                    ohe_cols = [c for c in cat_cols if df_work[c].nunique() <= 10]
+                    le_cols  = [c for c in cat_cols if df_work[c].nunique() > 10]
+
+                    # One-Hot Encoding
+                    if ohe_cols:
+                        df_work = pd.get_dummies(df_work, columns=ohe_cols, drop_first=True)
+                        bool_cols = [c for c in df_work.columns if df_work[c].dtype == bool]
+                        if bool_cols:
+                            df_work[bool_cols] = df_work[bool_cols].astype(int)
+
+                    # Label Encoding
+                    if le_cols:
+                        le = LabelEncoder()
+                        for c in le_cols:
+                            df_work[c] = le.fit_transform(df_work[c].astype(str))
+
+                    log.append(
+                        f"✅ 인코딩 완료: OHE {len(ohe_cols)}개 / Label {len(le_cols)}개"
+                    )
+
+                    # ── Target 인코딩 (필요시) ───────────────────
+                    if not pd.api.types.is_numeric_dtype(df_work[target_col_quick]):
+                        le = LabelEncoder()
+                        df_work[target_col_quick] = le.fit_transform(
+                            df_work[target_col_quick].astype(str)
+                        )
+                        log.append(f"✅ Target({target_col_quick}) 인코딩 완료")
+
+                # 결과 저장
+                st.session_state.df = df_work
+                st.session_state.encoded = True
+                st.session_state.quick_preprocessed = True
+
+                # 로그 출력
+                st.success("🎉 전처리 완료!")
+                for msg in log:
+                    st.write(msg)
+
+                col_a, col_b, col_c = st.columns(3)
+                with col_a:
+                    st.metric("최종 행 수", f"{df_work.shape[0]:,}행")
+                with col_b:
+                    st.metric("최종 열 수", f"{df_work.shape[1]:,}개")
+                with col_c:
+                    st.metric("잔여 결측치", f"{df_work.isnull().sum().sum()}개")
+
+                import time
+                time.sleep(0.5)
+                st.rerun()
+
+            except Exception as e:
+                st.error(f"❌ 전처리 오류: {e}")
+
     with tab1:
         missing = st.session_state.df.isnull().sum()
         missing = missing[missing > 0]
@@ -978,6 +1108,246 @@ elif current == "preprocess":
     st.markdown('<hr class="section-divider">', unsafe_allow_html=True)
 
     # ── SECTION 2: Feature Selection ──────────────────────────
+    # ── Feature Selection 섹션에 추가 ──
+    st.markdown("### 🎯 Feature Selection")
+
+    with st.expander("🔍 Stepwise Selection (자동 변수 선택)", expanded=False):
+        st.markdown("""
+        **Stepwise Selection 방식:**
+        - **Forward**: 변수를 하나씩 추가하며 최적 조합 탐색
+        - **Backward**: 전체 변수에서 하나씩 제거하며 최적 조합 탐색  
+        - **Both**: Forward + Backward 혼합 (권장)
+        - 기준: **AIC / BIC / p-value** 중 선택
+        """)
+
+        df_fs = st.session_state.df.copy()
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            target_fs = st.selectbox(
+                "🎯 종속변수 선택",
+                options=df_fs.columns.tolist(),
+                key="fs_target"
+            )
+        with col2:
+            step_direction = st.radio(
+                "탐색 방향",
+                ["Forward", "Backward", "Both"],
+                horizontal=True,
+                key="step_direction"
+            )
+        with col3:
+            step_criterion = st.radio(
+                "선택 기준",
+                ["p-value", "AIC"],
+                horizontal=True,
+                key="step_criterion"
+            )
+
+        if step_criterion == "p-value":
+            threshold = st.slider(
+                "p-value 임계값",
+                min_value=0.01,
+                max_value=0.10,
+                value=0.05,
+                step=0.01,
+                key="step_threshold"
+            )
+        else:
+            threshold = None
+
+        max_features = st.slider(
+            "최대 선택 변수 수",
+            min_value=1,
+            max_value=min(50, df_fs.shape[1] - 1),
+            value=min(20, df_fs.shape[1] - 1),
+            key="step_max_features"
+        )
+
+        if st.button("🔍 Stepwise Selection 실행", key="btn_stepwise", type="primary"):
+            try:
+                with st.spinner("Stepwise Selection 진행 중... (변수가 많으면 시간이 걸릴 수 있습니다)"):
+
+                    import statsmodels.api as sm
+
+                    feature_cols = [c for c in df_fs.columns if c != target_fs]
+                    X_all = df_fs[feature_cols].copy()
+                    y_all = df_fs[target_fs].copy()
+
+                    # 수치형만 사용
+                    X_all = X_all.select_dtypes(include='number')
+                    X_all = X_all.fillna(X_all.median())
+
+                    # ── Stepwise 함수 ─────────────────────────────
+                    def stepwise_selection(X, y, direction, criterion, threshold=0.05, max_feat=20):
+                        """
+                        Stepwise Feature Selection
+                        - direction: 'forward', 'backward', 'both'
+                        - criterion: 'p-value', 'AIC'
+                        """
+                        selected = []
+                        remaining = list(X.columns)
+                        best_aic = float('inf')
+                        step_log = []
+
+                        # ── Forward Step ──────────────────────────
+                        if direction in ["Forward", "Both"]:
+                            selected = []
+                            remaining = list(X.columns)
+
+                            while remaining and len(selected) < max_feat:
+                                scores = {}
+                                for col in remaining:
+                                    candidate = selected + [col]
+                                    try:
+                                        X_cand = sm.add_constant(X[candidate])
+                                        model = sm.Logit(y, X_cand).fit(disp=0)
+
+                                        if criterion == "p-value":
+                                            pval = model.pvalues[col]
+                                            scores[col] = pval
+                                        else:
+                                            scores[col] = model.aic
+                                    except:
+                                        continue
+
+                                if not scores:
+                                    break
+
+                                best_col = min(scores, key=scores.get)
+                                best_score = scores[best_col]
+
+                                if criterion == "p-value":
+                                    if best_score < threshold:
+                                        selected.append(best_col)
+                                        remaining.remove(best_col)
+                                        step_log.append(
+                                            f"➕ 추가: **{best_col}** (p={best_score:.4f})"
+                                        )
+                                    else:
+                                        break
+                                else:
+                                    if best_score < best_aic:
+                                        best_aic = best_score
+                                        selected.append(best_col)
+                                        remaining.remove(best_col)
+                                        step_log.append(
+                                            f"➕ 추가: **{best_col}** (AIC={best_score:.2f})"
+                                        )
+                                    else:
+                                        break
+
+                        # ── Backward Step ─────────────────────────
+                        elif direction == "Backward":
+                            selected = list(X.columns)[:max_feat]
+                            remaining = []
+
+                            while len(selected) > 1:
+                                scores = {}
+                                for col in selected:
+                                    candidate = [c for c in selected if c != col]
+                                    try:
+                                        X_cand = sm.add_constant(X[candidate])
+                                        model = sm.Logit(y, X_cand).fit(disp=0)
+
+                                        if criterion == "p-value":
+                                            scores[col] = model.pvalues.max()
+                                        else:
+                                            scores[col] = model.aic
+                                    except:
+                                        continue
+
+                                if not scores:
+                                    break
+
+                                worst_col = max(scores, key=scores.get)
+                                worst_score = scores[worst_col]
+
+                                if criterion == "p-value":
+                                    if worst_score > threshold:
+                                        selected.remove(worst_col)
+                                        step_log.append(
+                                            f"➖ 제거: **{worst_col}** (p={worst_score:.4f})"
+                                        )
+                                    else:
+                                        break
+                                else:
+                                    try:
+                                        X_cand = sm.add_constant(X[selected])
+                                        current_aic = sm.Logit(y, X_cand).fit(disp=0).aic
+                                        if worst_score < current_aic:
+                                            selected.remove(worst_col)
+                                            step_log.append(
+                                                f"➖ 제거: **{worst_col}** (AIC개선={current_aic - worst_score:.2f})"
+                                            )
+                                        else:
+                                            break
+                                    except:
+                                        break
+
+                        return selected, step_log
+
+                    # ── 실행 ──────────────────────────────────────
+                    selected_features, step_log = stepwise_selection(
+                        X_all, y_all,
+                        direction=step_direction,
+                        criterion=step_criterion,
+                        threshold=threshold if threshold else 0.05,
+                        max_feat=max_features
+                    )
+
+                # ── 결과 출력 ─────────────────────────────────────
+                st.success(f"✅ Stepwise 완료! **{len(selected_features)}개** 변수 선택됨")
+
+                # 단계별 로그
+                with st.expander("📋 단계별 선택 과정", expanded=False):
+                    for log in step_log:
+                        st.markdown(log)
+
+                # 선택된 변수 표시
+                st.markdown("**📌 선택된 변수 목록**")
+                result_df = pd.DataFrame({
+                    "변수명": selected_features,
+                    "순위": range(1, len(selected_features) + 1)
+                })
+                st.dataframe(result_df, use_container_width=True)
+
+                # 최종 모델 통계
+                if selected_features:
+                    try:
+                        X_final = sm.add_constant(X_all[selected_features])
+                        final_model = sm.Logit(y_all, X_final).fit(disp=0)
+
+                        col_a, col_b, col_c = st.columns(3)
+                        with col_a:
+                            st.metric("선택된 변수 수", f"{len(selected_features)}개")
+                        with col_b:
+                            st.metric("최종 AIC", f"{final_model.aic:.2f}")
+                        with col_c:
+                            st.metric("Pseudo R²", f"{final_model.prsquared:.4f}")
+
+                        with st.expander("📊 최종 모델 요약", expanded=False):
+                            st.text(final_model.summary().as_text())
+                    except Exception as e:
+                        st.warning(f"모델 요약 생성 실패: {e}")
+
+                # ── 데이터셋에 적용 ───────────────────────────────
+                st.markdown("---")
+                if st.button("✅ 선택된 변수로 데이터셋 업데이트", key="btn_apply_stepwise"):
+                    keep_cols = selected_features + [target_fs]
+                    st.session_state.df = df_fs[keep_cols].copy()
+                    st.success(f"✅ 데이터셋 업데이트 완료! ({len(keep_cols)}개 컬럼 유지)")
+
+                    import time
+                    time.sleep(0.5)
+                    st.rerun()
+
+            except ImportError:
+                st.error("❌ statsmodels 패키지가 필요합니다: pip install statsmodels")
+            except Exception as e:
+                st.error(f"❌ Stepwise 오류: {e}")
+                st.info("💡 변수가 너무 많거나 다중공선성이 있을 수 있습니다. 변수 수를 줄여보세요.")
+
     st.markdown("### 🎯 Feature Selection")
 
     df_cur = st.session_state.df
